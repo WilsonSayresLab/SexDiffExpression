@@ -12,7 +12,6 @@ trimmomatic_path = "trimmomatic"
 hisat2_build_path = "hisat2-build"
 hisat2_path = "hisat2"
 samtools_path = "samtools"
-FEATURECOUNTS = "featureCounts"
 xyalign_env_path = "xyalign_env"
 xyalign_path = "xyalign"
 stringtie_path = "stringtie"
@@ -29,29 +28,21 @@ SAMPLES = XX_SAMPLES + XY_SAMPLES_wo
 
 rule all:
 	input:
-		expand(
-			"fastqc_results/{sample}_fixed_{num}_fastqc.html",
-			sample=SAMPLES, num=[1, 2]),
 		"multiqc_results/multiqc_report.html",
-		expand(
-			"logfiles/{sample}_trimmomatic.log",
-			sample=SAMPLES),
-		expand(
-			"fastqc_trimmed_results/{sample}_trimmomatic_trimmed_paired_{num}_fastqc.html",
-			sample=SAMPLES, num=[1, 2]),
 		"multiqc_trimmed_results/multiqc_report.html",
 		expand(
-			"xyalign/reference/{assembly}_{chr}.fa",
-			assembly=["hg38"], chr=["xx", "xy"]),
-		expand(
-			"hisat2_index/{assembly}_{chr}.6.ht2",
-			assembly=["hg38"], chr=["xx", "xy"]),
-		expand(
-			"bams/{sample}_{assembly}.sorted.bam",
-			assembly=["hg38"], sample=SAMPLES),
-		expand(
-			"stringtie_results_postmerge/{sample}_{assembly}.assembled_transcripts.gtf",
+			"stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.secondpass.gtf",
 			assembly=["hg38"], sample=SAMPLES)
+
+rule download_ensembl_gff:
+	output:
+		"reference/{genome}.gff"
+	params:
+		web_address = lambda wildcards: config["gff_address"][wildcards.genome],
+		initial_output = "reference/{genome}.gff.gz"
+	run:
+		shell("wget {params.web_address} -O {params.initial_output}")
+		shell("gunzip {params.initial_output}")
 
 rule fastqc_analysis:
 	input:
@@ -85,10 +76,10 @@ rule trimmomatic:
 			fastq_directory, "{sample}/{sample}_fixed_2.fastq"),
 		ADAPTER_FASTA = "misc/adapter_sequences.fa"
 	output:
-		paired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_1.fastq",
-		paired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_2.fastq",
-		unpaired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_unpaired_1.fastq",
-		unpaired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_unpaired_2.fastq",
+		paired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_1.fastq.gz",
+		paired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_2.fastq.gz",
+		unpaired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_unpaired_1.fastq.gz",
+		unpaired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_unpaired_2.fastq.gz",
 		logfile = "logfiles/{sample}_trimmomatic.log"
 	params:
 		threads = 4,
@@ -111,7 +102,7 @@ rule trimmomatic:
 rule fastqc_analysis_trimmed:
 	input:
 		expand(
-			"trimmed_fastqs/{{sample}}_trimmomatic_trimmed_paired_{num}.fastq",
+			"trimmed_fastqs/{{sample}}_trimmomatic_trimmed_paired_{num}.fastq.gz",
 			num=[1, 2])
 	output:
 		ofq1 = "fastqc_trimmed_results/{sample}_trimmomatic_trimmed_paired_1_fastqc.html",
@@ -166,8 +157,8 @@ rule hisat2_index:
 
 rule hisat2_align_reads:
 	input:
-		paired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_1.fastq",
-		paired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_2.fastq",
+		paired_1 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_1.fastq.gz",
+		paired_2 = "trimmed_fastqs/{sample}_trimmomatic_trimmed_paired_2.fastq.gz",
 		xx = "hisat2_index/{assembly}_xx.6.ht2",
 		xy = "hisat2_index/{assembly}_xy.6.ht2"
 	output:
@@ -193,45 +184,65 @@ rule hisat2_align_reads:
 				"{params.samtools} view -b - | "
 				"{params.samtools} sort -O bam -o {output} -")
 
-rule stringtie:
+rule stringtie_first_pass:
 	input:
-		aligned_reads = "bams/{sample}_{assembly}.sorted.bam"
+		bam = "bams/{sample}_{assembly}.sorted.bam",
+		gff = "reference/{genome}.gff"
 	output:
-		assembled_transcripts = "stringtie_results/{sample}_{assembly}.assembled_transcripts.gtf",
-		gene_abundances = "stringtie_results/{sample}_{assembly}.gene_abundances.txt"
-		# fully_covered_transcripts="stringtie_results/{sample}_{assembly}.fully_covered_transcripts.gtf"
+		"stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.firstpass.gtf"
+	threads:
+		4
 	params:
-		stringtie = stringtie_path
+		stringtie = stringtie_path,
+		threads = 4
 	shell:
-		"{params.stringtie} {input.aligned_reads} -o {output.assembled_transcripts} "
-		"-A {output.gene_abundances}"
-		# -C {output.fully_covered_transcripts}
+		"{params.stringtie} {input.bam} -o {output} -p {params.threads} "
+		"-G {input.gff}"
+
+rule create_stringtie_merged_list:
+	input:
+		lambda wildcards: expand(
+			"stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.firstpass.gtf",
+			assembly=wildcards.genome,
+			sample=SAMPLES)
+	output:
+		"stringtie_results/{genome}_gtflist.txt"
+	run:
+		shell("echo -n > {output}")
+		for i in input:
+			shell("echo {} >> {{output}}".format(i))
 
 rule stringtie_merge:
 	input:
-		assembled_transcripts = lambda wildcards: expand(
-			"stringtie_results/{sample}_{assembly}.assembled_transcripts.gtf",
-			sample=SAMPLES, assembly=[wildcards.assembly])
+		stringtie_list = "stringtie_results/{genome}_gtflist.txt",
+		gff = "reference/{genome}.gff"
 	output:
-		"stringtie_results/{assembly}.stringtie_merge.gtf"
+		"stringtie_results/{genome}.merged.gtf"
+	threads:
+		4
 	params:
-		stringtie = stringtie_path
+		stringtie = stringtie_path,
+		threads = 4
 	shell:
-		"{params.stringtie} --merge {input.assembled_transcripts} -o {output} "
+		"{params.stringtie} --merge {input.stringtie_list} -o {output} "
+		"-p {params.threads} -G {input.gff}"
 
-rule stringtie_2:
+rule stringtie_second_pass:
 	input:
-		G = "stringtie_results/{assembly}.stringtie_merge.gtf",
-		aligned_reads = "bams/{sample}_{assembly}.sorted.bam"
+		bam = bam = "bams/{sample}_{assembly}.sorted.bam",
+		gff = "stringtie_results/{genome}.merged.gtf"
 	output:
-		assembled_transcripts = "stringtie_results_postmerge/{sample}_{assembly}.assembled_transcripts.gtf",
-		gene_abundances = "stringtie_results_postmerge/{sample}_{assembly}.gene_abundances.txt",
-		fully_covered_transcripts = "stringtie_results_postmerge/{sample}_{assembly}.fully_covered_transcripts.gtf"
+		assembled_transcripts = "stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.secondpass.gtf",
+		gene_abundances = "stringtie_results/sample_{sample}/{sample}_{assembly}.gene_abundances.secondpass.txt",
+		fully_covered_transcripts = "stringtie_results/sample_{sample}/{sample}_{assembly}.fully_covered_transcripts.secondpass.gtf"
+	threads:
+		4
 	params:
-		stringtie = stringtie_path
+		stringtie = stringtie_path,
+		threads = 4
 	shell:
-		"{params.stringtie} {input.aligned_reads} -G {input.G} "
-		"-B -e "
+		"{params.stringtie} {input.bam} -p {params.threads} "
+		"-G {input.gff} -B -e "
 		"-o {output.assembled_transcripts} "
 		"-A {output.gene_abundances} "
-		"-C {output.fully_covered_transcripts} "
+		"-C {output.fully_covered_transcripts}"
