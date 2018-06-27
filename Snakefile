@@ -229,7 +229,7 @@ rule stringtie_merge:
 
 rule stringtie_second_pass:
 	input:
-		bam = bam = "bams/{sample}_{assembly}.sorted.bam",
+		bam = "bams/{sample}_{assembly}.sorted.bam",
 		gff = "stringtie_results/{genome}.merged.gtf"
 	output:
 		assembled_transcripts = "stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.secondpass.gtf",
