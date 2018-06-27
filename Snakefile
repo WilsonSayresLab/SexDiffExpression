@@ -38,7 +38,8 @@ rule download_ensembl_gff:
 	output:
 		"reference/{genome}.gff"
 	params:
-		web_address = lambda wildcards: config["gff_address"][wildcards.genome],
+		web_address = lambda wildcards: config[
+			"gff_address"]["ensembl"][wildcards.genome],
 		initial_output = "reference/{genome}.gff.gz"
 	run:
 		shell("wget {params.web_address} -O {params.initial_output}")
