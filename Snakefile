@@ -187,7 +187,7 @@ rule hisat2_align_reads:
 rule stringtie_first_pass:
 	input:
 		bam = "bams/{sample}_{assembly}.sorted.bam",
-		gff = "reference/{genome}.gff"
+		gff = "reference/{assembly}.gff"
 	output:
 		"stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.firstpass.gtf"
 	threads:
@@ -230,7 +230,7 @@ rule stringtie_merge:
 rule stringtie_second_pass:
 	input:
 		bam = "bams/{sample}_{assembly}.sorted.bam",
-		gff = "stringtie_results/{genome}.merged.gtf"
+		gff = "stringtie_results/{assembly}.merged.gtf"
 	output:
 		assembled_transcripts = "stringtie_results/sample_{sample}/{sample}_{assembly}.assembled_transcripts.secondpass.gtf",
 		gene_abundances = "stringtie_results/sample_{sample}/{sample}_{assembly}.gene_abundances.secondpass.txt",
